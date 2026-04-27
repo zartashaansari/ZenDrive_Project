@@ -71,20 +71,32 @@ class AIEngine:
         # We no longer need pyttsx3.init() here for Mac stability
         self.speak("ZenDrive system initialized")
 
-    def speak(self, text):
-     """Windows Speech Engine"""
-     def run_speech():
-        try:
-            # We initialize inside the thread to avoid 'Main thread' errors
-            engine = pyttsx3.init()
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as e:
-            print(f"Speech Error: {e}")
-            
-     threading.Thread(target=run_speech, daemon=True).start()
-            
+    def speak(self, text, voice="Male", tone="Calm"):
+        """Windows Speech Engine with Dynamic Voice and Tone"""
+        def run_speech():
+            try:
+                # Initialize inside the thread to avoid COM/Main thread errors
+                engine = pyttsx3.init()
 
+                # 1. Voice Selection (0 = Male, 1 = Female)
+                voices = engine.getProperty('voices')
+                if voice == "Female" and len(voices) > 1:
+                    engine.setProperty('voice', voices[1].id)
+                else:
+                    engine.setProperty('voice', voices[0].id)
+
+                # 2. Tone Selection (Adjusting Rate)
+                rate = 200 if tone == "Assertive" else 150
+                engine.setProperty('rate', rate)
+
+                engine.say(text)
+                engine.runAndWait()
+                # Crucial: Stop the engine after speaking to prevent "run loop" errors
+                engine.stop() 
+            except Exception as e:
+                print(f"Speech Error: {e}")
+                
+        threading.Thread(target=run_speech, daemon=True).start()
 
     def enhance_frame(self, frame):
         # 1. Convert to LAB and push CLAHE harder
