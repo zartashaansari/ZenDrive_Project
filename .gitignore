@@ -1,0 +1,10 @@
+# Ignore virtual environments
+.venv/
+env/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore Database files (Optional, but good practice so you don't upload test data)
+*.db

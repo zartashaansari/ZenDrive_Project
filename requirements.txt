@@ -1,0 +1,22 @@
+# How to install these libraries in your project.
+# first open terminal
+# then run these 3 commands in sequence
+# uv venv
+# .\.venv\Scripts\activate
+# uv pip install -r requirements.txt
+
+#if no file is found error, then run these commands in sequence
+#cd "ZenDrive_Prototype 2"
+#to check are you in write folder or not, run this command
+#dir
+#if yes then you will see requirements.txt file in the list, then run this command
+#uv pip install -r requirements.txt
+
+customtkinter
+pillow
+opencv-python
+ultralytics
+numpy
+pyttsx3
+pypiwin32
+matplotlib
