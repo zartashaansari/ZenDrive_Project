@@ -1,435 +1,324 @@
-import sqlite3
 import cv2
 import numpy as np
 import hashlib
 import json
 import pyttsx3
 import threading
-from ultralytics import YOLO
 import os
 import time
-import customtkinter as ctk  # Fixes 'ctk' is not defined
-from PIL import Image, ImageTk
+import datetime
+from ultralytics import YOLO
+import psycopg2 
 
 class DatabaseManager:
-    def __init__(self, db_name="../smog_project.db"):
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
+    def __init__(self, conn_string):
+        self.conn = None
+        self.is_cloud = False
+        
+        try:
+            self.conn = psycopg2.connect(conn_string, connect_timeout=5)
+            self.is_cloud = True
+            print("✅ ZenDrive GLOBAL SYNC: ONLINE")
+        except Exception as e:
+            print(f"⚠️ Cloud Sync Unavailable: {e}\n🔄 Switching to LOCAL DEMO MODE...")
+            import sqlite3
+            self.conn = sqlite3.connect("zendrive_local.db", check_same_thread=False)
+            self.is_cloud = False
+
         self.create_tables()
 
     def create_tables(self):
-        cursor = self.conn.cursor()
+        cur = self.conn.cursor()
+        id_type = "SERIAL" if self.is_cloud else "INTEGER PRIMARY KEY AUTOINCREMENT"
         
-        # 1. Users Table (Modified SDS: Added 'email' column)
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            username TEXT UNIQUE,
-                            email TEXT,
-                            password_hash TEXT,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            preferences TEXT
-                          )''')
-                          
-        # 2. TripSessions Table (Strict SDS)
-        cursor.execute('''CREATE TABLE IF NOT EXISTS trip_sessions (
-                            session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            user_id INTEGER,
-                            start_time DATETIME,
-                            end_time DATETIME,
-                            avg_visibility REAL,
-                            total_hazards INTEGER,
-                            FOREIGN KEY(user_id) REFERENCES users(user_id)
-                          )''')
-                          
-        # 3. HazardEvents Table (Strict SDS)
-        cursor.execute('''CREATE TABLE IF NOT EXISTS hazard_events (
-                            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            session_id INTEGER,
-                            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            type TEXT,
-                            confidence REAL,
-                            gps_lat REAL,
-                            gps_long REAL,
-                            FOREIGN KEY(session_id) REFERENCES trip_sessions(session_id)
-                          )''')
+        cur.execute(f'''CREATE TABLE IF NOT EXISTS users (
+            user_id {id_type},
+            username TEXT UNIQUE,
+            email TEXT,
+            password_hash TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            preferences TEXT
+        )''')
+        
+        cur.execute(f'''CREATE TABLE IF NOT EXISTS trip_sessions (
+            session_id {id_type},
+            user_id INTEGER,
+            start_time TIMESTAMP,
+            end_time TIMESTAMP,
+            avg_visibility REAL,
+            total_hazards INTEGER
+        )''')
+        
+        cur.execute(f'''CREATE TABLE IF NOT EXISTS hazard_events (
+            event_id {id_type},
+            session_id INTEGER,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            type TEXT,
+            confidence REAL,
+            gps_lat REAL,
+            gps_long REAL
+        )''')
         self.conn.commit()
+
+    def _get_p(self):
+        return "%s" if self.is_cloud else "?"
 
     def _hash_password(self, password):
         return hashlib.sha256(password.encode()).hexdigest()
 
     def verify_login(self, username, password):
-        cursor = self.conn.cursor()
+        p = self._get_p()
         hashed_pwd = self._hash_password(password)
-        # We now return the whole row so we can get the user_id
-        cursor.execute("SELECT * FROM users WHERE username=? AND password_hash=?", (username, hashed_pwd))
-        return cursor.fetchone()
+        cur = self.conn.cursor()
+        cur.execute(f"SELECT * FROM users WHERE username={p} AND password_hash={p}", (username, hashed_pwd))
+        return cur.fetchone()
 
     def register_user(self, username, password, email):
-        cursor = self.conn.cursor()
+        p = self._get_p()
         hashed_pwd = self._hash_password(password)
         default_prefs = json.dumps({"theme": "Dark", "volume": 70.0})
         try:
-            # Pushing the username, email, password, and preferences into the DB
-            cursor.execute("INSERT INTO users (username, email, password_hash, preferences) VALUES (?, ?, ?, ?)", 
-                           (username, email, hashed_pwd, default_prefs))
+            cur = self.conn.cursor()
+            cur.execute(f"INSERT INTO users (username, email, password_hash, preferences) VALUES ({p}, {p}, {p}, {p})", 
+                       (username, email, hashed_pwd, default_prefs))
             self.conn.commit()
-            print(f"DEBUG: User '{username}' successfully written to DB with email: {email}") 
+
             return True
-        except sqlite3.IntegrityError:
-            print(f"DEBUG: Registration failed. Username '{username}' already exists.")
-            return False
+        
         except Exception as e:
-            print(f"DEBUG: Database Error: {e}")
+            print(f"Registration DB Error: {e}")
             return False
         
     def update_user_preferences(self, username, pref_json_str):
-        cursor = self.conn.cursor()
-        cursor.execute("UPDATE users SET preferences=? WHERE username=?", (pref_json_str, username))
+        p = self._get_p()
+        cur = self.conn.cursor()
+        cur.execute(f"UPDATE users SET preferences = {p} WHERE username = {p}", (pref_json_str, username))
         self.conn.commit()
 
-    def get_recent_trips(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT timestamp, avg_visibility, hazards_detected FROM trip_sessions ORDER BY session_id DESC LIMIT 5")
-        return cursor.fetchall()
+    def create_active_session(self, user_id, start_time):
+        p = self._get_p()
+        cur = self.conn.cursor()
+        if self.is_cloud:
+            cur.execute(f"INSERT INTO trip_sessions (user_id, start_time, avg_visibility, total_hazards) VALUES ({p}, {p}, 0.0, 0) RETURNING session_id", 
+                       (user_id, start_time))
+            session_id = cur.fetchone()[0]
+        else:
+            cur.execute(f"INSERT INTO trip_sessions (user_id, start_time, avg_visibility, total_hazards) VALUES ({p}, {p}, 0.0, 0)", 
+                       (user_id, start_time))
+            session_id = cur.lastrowid
+        self.conn.commit()
+        return session_id
+
     def save_trip_session(self, user_id, start_time, end_time, avg_visibility, total_hazards):
-        cursor = self.conn.cursor()
-        try:
-            # We strictly use the SDS columns here
-            cursor.execute('''INSERT INTO trip_sessions 
-                              (user_id, start_time, end_time, avg_visibility, total_hazards) 
-                              VALUES (?, ?, ?, ?, ?)''', 
-                           (user_id, start_time, end_time, avg_visibility, total_hazards))
-            self.conn.commit()
-            
-            # CRITICAL: We return the ID of the trip we just created so we can link the hazards to it!
-            return cursor.lastrowid 
-        except Exception as e:
-            print(f"DB ERROR saving trip: {e}")
-            return None
+        p = self._get_p()
+        cur = self.conn.cursor()
+        if self.is_cloud:
+            cur.execute(f"INSERT INTO trip_sessions (user_id, start_time, end_time, avg_visibility, total_hazards) VALUES ({p}, {p}, {p}, {p}, {p}) RETURNING session_id", 
+                       (user_id, start_time, end_time, avg_visibility, total_hazards))
+            session_id = cur.fetchone()[0]
+        else:
+            cur.execute(f"INSERT INTO trip_sessions (user_id, start_time, end_time, avg_visibility, total_hazards) VALUES ({p}, {p}, {p}, {p}, {p})", 
+                       (user_id, start_time, end_time, avg_visibility, total_hazards))
+            session_id = cur.lastrowid
+        self.conn.commit()
+        return session_id
 
     def save_hazard_events(self, session_id, hazards_list):
-        cursor = self.conn.cursor()
+        p = self._get_p()
         try:
-            # hazards_list will contain tuples: (timestamp, type, confidence, gps_lat, gps_long)
-            # executemany allows us to save 100 hazards in a single, fast operation
-            cursor.executemany('''INSERT INTO hazard_events 
-                                  (session_id, timestamp, type, confidence, gps_lat, gps_long) 
-                                  VALUES (?, ?, ?, ?, ?, ?)''', 
-                               [(session_id,) + hazard for hazard in hazards_list])
+            cur = self.conn.cursor()
+            for h in hazards_list:
+                cur.execute(f"INSERT INTO hazard_events (session_id, timestamp, type, confidence, gps_lat, gps_long) VALUES ({p}, {p}, {p}, {p}, {p}, {p})",
+                           (session_id,) + h)
             self.conn.commit()
-            print(f"DB SUCCESS: Logged {len(hazards_list)} specific hazard events.")
         except Exception as e:
-            print(f"DB ERROR saving hazard events: {e}")
-    def create_active_session(self, user_id, start_time):
-        cursor = self.conn.cursor()
-        # We insert a row where end_time is NULL and visibility starts at 0
-        cursor.execute('''INSERT INTO trip_sessions 
-                          (user_id, start_time, end_time, avg_visibility, total_hazards) 
-                          VALUES (?, ?, NULL, 0.0, 0)''', 
-                       (user_id, start_time))
-        self.conn.commit()
-        return cursor.lastrowid
-            
-   # ==========================================
-    # ADMIN PANEL DATA FUNCTIONS
-    # ==========================================
-            
+            print(f"Hazard Save Error: {e}")
+
     def get_admin_stats(self):
-        cursor = self.conn.cursor()
-        
-        # We only count trips as "Active" if they have no end_time 
-        # AND were started today (prevents ghosts from previous days)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT user_id) 
-            FROM trip_sessions 
-            WHERE end_time IS NULL 
-            AND date(start_time) = date('now')
-        """)
-        active_users = cursor.fetchone()[0]
-    
-    # 2. Hazards facing ALL current active users
-    # We count hazards linked to sessions that haven't ended yet
-        cursor.execute("""
-        SELECT COUNT(h.event_id) 
-        FROM hazard_events h
-        JOIN trip_sessions s ON h.session_id = s.session_id
-        WHERE s.end_time IS NULL
-    """)
-        runtime_hazards = cursor.fetchone()[0]
-    
-    # 3. Average Visibility (Historical - from all completed sessions)
-        cursor.execute("SELECT AVG(avg_visibility) FROM trip_sessions WHERE end_time IS NOT NULL")
-        res = cursor.fetchone()[0]
-        historical_vis = round(res, 1) if res is not None else 0.0
-    
-        return active_users, runtime_hazards, historical_vis
-        
-    
-    def get_admin_sidebar_feed(self, limit=5):
-        """Fetches the most recent hazards for the right sidebar."""
-        cursor = self.conn.cursor()
-        query = """
-            SELECT h.type, h.timestamp, u.username 
-            FROM hazard_events h
-            JOIN trip_sessions s ON h.session_id = s.session_id
-            JOIN users u ON s.user_id = u.user_id
-            ORDER BY h.timestamp DESC LIMIT ?
-        """
-        cursor.execute(query, (limit,))
-        return cursor.fetchall()
-    
-    def get_daily_performance_data(self):
-        """Fetches hazard counts for the last 7 days for the Line Chart."""
-        cursor = self.conn.cursor()
-        query = """
-            SELECT date(timestamp) as day, COUNT(event_id) 
-            FROM hazard_events 
-            GROUP BY day 
-            ORDER BY day ASC LIMIT 7  
-        """
-        cursor.execute(query)
-        return cursor.fetchall()
-    
-
-    def show_home_performance(self):
-        self.clear_view()
-        
-        ctk.CTkLabel(self.view_area, text="SYSTEM PERFORMANCE TREND", 
-                     font=("Roboto", 20, "bold"), text_color=self.main_color).pack(pady=20)
-
-        # 1. Fetch Data
-        data = self.db.get_daily_performance_data()
-        if not data:
-            ctk.CTkLabel(self.view_area, text="Insufficient data to plot trend.").pack(pady=50)
-            return
-
-        # 2. Setup Canvas for Drawing
-        canvas_width = 600
-        canvas_height = 300
-        canvas = ctk.CTkCanvas(self.view_area, width=canvas_width, height=canvas_height, 
-                               bg="#1a1a1a", highlightthickness=0)
-        canvas.pack(pady=10)
-
-        # 3. Chart Logic
-        counts = [d[1] for d in data]
-        dates = [d[0][-5:] for d in data] # Just MM-DD
-        max_count = max(counts) if max(counts) > 0 else 1
-        
-        padding = 50
-        graph_w = canvas_width - (padding * 2)
-        graph_h = canvas_height - (padding * 2)
-        
-        # Calculate points (x, y)
-        points = []
-        for i, count in enumerate(counts):
-            x = padding + (i * (graph_w / (len(counts) - 1 if len(counts) > 1 else 1)))
-            y = (canvas_height - padding) - (count / max_count * graph_h)
-            points.append((x, y))
-
-        # 4. Draw Grid Lines (Y-Axis)
-        for i in range(5):
-            y_grid = (canvas_height - padding) - (i * (graph_h / 4))
-            canvas.create_line(padding, y_grid, canvas_width - padding, y_grid, fill="#333", dash=(2, 2))
-
-        # 5. Draw the Line and Points
-        for i in range(len(points) - 1):
-            canvas.create_line(points[i][0], points[i][1], points[i+1][0], points[i+1][1], 
-                               fill=self.main_color, width=3, smooth=True)
-        
-        for i, (x, y) in enumerate(points):
-            # Draw point circles
-            canvas.create_oval(x-4, y-4, x+4, y+4, fill=self.main_color, outline="white")
-            # Draw X-Axis Labels (Dates)
-            canvas.create_text(x, canvas_height - 20, text=dates[i], fill="white", font=("Roboto", 10))
-            # Draw Values on top of points
-            canvas.create_text(x, y - 15, text=str(counts[i]), fill=self.main_color, font=("Roboto", 10, "bold"))
-
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM trip_sessions WHERE end_time IS NULL")
+        active = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM hazard_events")
+        hazards = cur.fetchone()[0]
+        cur.execute("SELECT AVG(avg_visibility) FROM trip_sessions")
+        vis = cur.fetchone()[0]
+        return active, hazards, round(float(vis or 0), 1)
 
     def get_all_users(self):
-        """Fetches all registered users for the User Management table."""
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT user_id, username, email, created_at, preferences FROM users")
-        return cursor.fetchall()
-
-    def show_user_management(self):
-        self.clear_view() # Function to clear self.view_area
-        
-        ctk.CTkLabel(self.view_area, text="REGISTERED SYSTEM USERS", 
-                     font=("Roboto", 20, "bold"), text_color=self.main_color).pack(pady=10)
-        
-        table_container = ctk.CTkScrollableFrame(self.view_area, fg_color="#111")
-        table_container.pack(fill="both", expand=True, padx=20, pady=10)
-
-        # Headers
-        h_frame = ctk.CTkFrame(table_container, fg_color="#222")
-        h_frame.pack(fill="x", pady=5)
-        headers = ["ID", "Username", "Email", "Contact"]
-        for i, text in enumerate(headers):
-            ctk.CTkLabel(h_frame, text=text, font=("Roboto", 12, "bold"), width=140).grid(row=0, column=i)
-
-        # Data rows
-        users = self.db.get_all_users()
-        for user in users:
-            row_frame = ctk.CTkFrame(table_container, fg_color="transparent")
-            row_frame.pack(fill="x")
-            for col, val in enumerate(user):
-                ctk.CTkLabel(row_frame, text=str(val), width=140).grid(row=0, column=col)
+        cur = self.conn.cursor()
+        cur.execute("SELECT user_id, username, email, created_at, preferences FROM users")
+        return cur.fetchall()
 
     def get_all_hazard_logs(self):
-        """Fetches all hazard records for the central data table."""
-        cursor = self.conn.cursor()
-        query = """
-            SELECT h.type, h.timestamp, h.confidence, h.gps_lat, h.gps_long, u.username
-            FROM hazard_events h
-            JOIN trip_sessions s ON h.session_id = s.session_id
-            JOIN users u ON s.user_id = u.user_id
-            ORDER BY h.timestamp DESC
-        """
-        cursor.execute(query)
-        return cursor.fetchall()
-    
-    
-    def get_visibility_trend_data(self):
-        """Fetches average visibility for the last 7 days."""
-        cursor = self.conn.cursor()
-        query = """
-        SELECT date(start_time) as day, AVG(avg_visibility) 
-        FROM trip_sessions 
-        WHERE start_time >= date('now', '-7 days')
-        GROUP BY day 
-        ORDER BY day ASC
-        """
-        cursor.execute(query)
-        return cursor.fetchall()
+        query = "SELECT h.type, h.timestamp, h.confidence, h.gps_lat, h.gps_long, u.username FROM hazard_events h JOIN trip_sessions s ON h.session_id = s.session_id JOIN users u ON s.user_id = u.user_id ORDER BY h.timestamp DESC"
+        cur = self.conn.cursor()
+        cur.execute(query)
+        return cur.fetchall()
+            
+    def get_admin_sidebar_feed(self, limit=5):
+        p = self._get_p()
+        query = f"SELECT h.type, h.timestamp, u.username FROM hazard_events h JOIN trip_sessions s ON h.session_id = s.session_id JOIN users u ON s.user_id = u.user_id ORDER BY h.timestamp DESC LIMIT {p}"
+        cur = self.conn.cursor()
+        cur.execute(query, (limit,))
+        return cur.fetchall()
 
+    def get_daily_performance_data(self):
+        query = "SELECT date(timestamp) as day, COUNT(*) FROM hazard_events GROUP BY day ORDER BY day ASC LIMIT 7"
+        cur = self.conn.cursor()
+        cur.execute(query)
+        return cur.fetchall()
+
+    def get_visibility_trend_data(self):
+        query = "SELECT date(start_time) as day, AVG(avg_visibility) FROM trip_sessions GROUP BY day ORDER BY day ASC LIMIT 7"
+        cur = self.conn.cursor()
+        cur.execute(query)
+        return cur.fetchall()
+import os
+import subprocess
 class AIEngine:
     def __init__(self):
+        # Existing model and CLAHE setup
         self.model = YOLO("../models/yolov8n.pt")
-        self.clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        self.prefs = {} # NEW: Empty bucket to hold the user's settings
-        self.is_speaking = False
+        self.model.fuse()
+        self.clahe = cv2.createCLAHE(clipLimit=7.0, tileGridSize=(4, 4))
+        
+        self.prefs = {}
+        self.is_speaking = False  # The "Muzzle" to prevent lag
+        self.hazard_memory = {} 
+        self.memory_timeout = 3  # Increased to prevent sound congestion
 
     def set_preferences(self, prefs_dict):
-        """NEW: Updates the AI's settings live when the user changes them"""
-        self.prefs = prefs_dict
 
+        self.prefs = prefs_dict
     def speak(self, text):
-        """Thread-Safe Speech with Lock and Exact SAPI5 ID Matching"""
-        # --- NEW: If already talking, ignore the new request ---
+        """Zero-Latency Mac 'say' implementation"""
+        # If the AI is currently talking, don't queue more sounds to avoid lag
         if self.is_speaking:
             return 
 
         def run_speech():
-            self.is_speaking = True # Engage the lock
+            self.is_speaking = True
             try:
-                engine = pyttsx3.init()
+                # 1. Clean the string for the shell
+                safe_text = text.replace('"', '').replace("'", "")
                 
-                vol = self.prefs.get("vol", 70.0)
-                engine.setProperty('volume', vol / 100.0)
-                tone = self.prefs.get("tone", "Calm")
-                engine.setProperty('rate', 200 if tone == "Assertive" else 150)
-                    
-                target_lang = self.prefs.get("lang", "English").lower()
-                target_gender = self.prefs.get("voice", "Male").lower()
-
-                # --- Trimmed Mini-Translator ---
-                translations = {
-                    "french": {
-                        "System test successful.": "Test du système réussi.",
-                        "Emergency. New obstacle in fog.": "Urgence. Nouvel obstacle dans le brouillard.",
-                        "Warning. New obstacle detected.": "Attention. Nouvel obstacle détecté."
-                    }
-                }
+                # 2. Get preferences
+                voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
+                # Use a slightly faster rate to make the response feel snappier
+                rate = "240" if self.prefs.get("tone") == "Assertive" else "200"
                 
-                # Swap the text if a translation exists
-                final_text = text
-                if target_lang in translations and text in translations[target_lang]:
-                    final_text = translations[target_lang][text]
+                # 3. USE POPEN: This 'fires and forgets', so it doesn't wait
+                # We add '&&' to reset the is_speaking flag only after it finishes
+                subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
                 
-                voices = engine.getProperty('voices')
-                selected_voice, fallback_voice = None, None
-                
-                # --- FIXED: Trimmed to only map English and French ---
-                lang_codes = {"english": "en", "french": "fr"}
-                target_code = lang_codes.get(target_lang, "en")
-                
-                
-                for voice in voices:
-                    v_id, v_name = voice.id.lower(), voice.name.lower()
-                    if target_code in v_id:
-                        fallback_voice = voice.id 
-                        is_female = any(name in v_name for name in ['zira', 'helena', 'hortense','kalpana'])
-                        if (target_gender == "female" and is_female) or (target_gender == "male" and not is_female):
-                            selected_voice = voice.id
-                            break 
-                
-                if selected_voice:
-                    engine.setProperty('voice', selected_voice)
-                elif fallback_voice:
-                    print(f"AUDIO: Using fallback gender for {target_lang} (Requested gender not installed)")
-                    engine.setProperty('voice', fallback_voice)
-                else:
-                    if target_gender == "female" and len(voices) > 1:
-                        engine.setProperty('voice', voices[1].id) 
-                    else:
-                        engine.setProperty('voice', voices[0].id) 
-
-                engine.say(text)
-                engine.runAndWait()
+                # Add a short mandatory 'silence' buffer to prevent sound overlap
+                time.sleep(1.2) 
             except Exception as e:
-                print(f"Audio Engine Error: {e}")
+                print(f"Mac Audio Lag Fix Error: {e}")
             finally:
-                self.is_speaking = False # Release the lock when done
+                self.is_speaking = False
 
         threading.Thread(target=run_speech, daemon=True).start()
+    # def speak(self, text):
+    # #    """Zero-Latency Mac 'say' implementation"""
+    #     # If the AI is currently talking, don't queue more sounds to avoid lag
+    #     if self.is_speaking:
+    #         return 
+
+    #     def run_speech():
+    #         self.is_speaking = True
+    #         try:
+    #             # 1. Clean the string for the shell
+    #             safe_text = text.replace('"', '').replace("'", "")
+                
+    #             # 2. Get preferences
+    #             voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
+    #             # Use a slightly faster rate to make the response feel snappier
+    #             rate = "240" if self.prefs.get("tone") == "Assertive" else "200"
+                
+    #             # 3. USE POPEN: This 'fires and forgets', so it doesn't wait
+    #             # We add '&&' to reset the is_speaking flag only after it finishes
+    #             subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
+                
+    #             # Add a short mandatory 'silence' buffer to prevent sound overlap
+    #             time.sleep(1.2) 
+    #         except Exception as e:
+    #             print(f"Mac Audio Lag Fix Error: {e}")
+    #         finally:
+    #             self.is_speaking = False
+
+    #     threading.Thread(target=run_speech, daemon=True).start()
+
+        # def run_speech():
+        #     self.is_speaking = True
+        #     try:
+        #         # Clean text
+        #         msg = text.replace('"', '').replace("'", "")
+                
+        #         # Get preferences
+        #         voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
+        #         rate = str(230 if self.prefs.get("tone") == "Assertive" else 190)
+                
+        #         # subprocess.Popen is much faster than os.system because it
+        #         # starts the process and immediately returns control to Python
+        #         subprocess.Popen(['say', '-v', voice, '-r', rate, msg])
+                
+        #         # We give the Mac a small "rest" so sounds don't overlap
+        #         time.sleep(1.5) 
+        #     except Exception as e:
+        #         print(f"Speech Delay Error: {e}")
+        #     finally:
+        #         self.is_speaking = False
+
+        # threading.Thread(target=run_speech, daemon=True).start()
 
     def enhance_frame(self, frame):
-        # 1. Convert to LAB and push CLAHE harder
+        """TRIPLE-PASS Enhancement for 3 Layers of Plastic."""
+        # Pass 1: Local Contrast Normalization
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
+        l_enhanced = self.clahe.apply(l)
+        frame_clahe = cv2.cvtColor(cv2.merge((l_enhanced, a, b)), cv2.COLOR_LAB2BGR)
         
-        # Pull details out of the white haze
-        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
-        l2 = clahe.apply(l)
+        # Pass 2: Sharpness Boost (Unsharp Masking)
+        # This makes the edges of objects visible through the blur of the 3rd layer
+        gaussian_3 = cv2.GaussianBlur(frame_clahe, (0, 0), 2.0)
+        unsharp_image = cv2.addWeighted(frame_clahe, 2.0, gaussian_3, -1.0, 0)
         
-        lab = cv2.merge((l2, a, b))
-        enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-    
-        # 2. Heavy Gamma Correction to darken white paper to reveal shadows
-        gamma = 2.2 
+        # Pass 3: Heavy Gamma Correction
+        # 3 layers of plastic create a 'milky' white glare. Gamma 0.7 forces it back to black.
+        gamma = 0.7 
         invGamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-        return cv2.LUT(enhanced, table)
+        return cv2.LUT(unsharp_image, table)
 
-    def detect_hazards(self, frame, conf=0.25):
-        # 1. Run inference on the smaller frame for <100ms latency
-        results = self.model(frame, classes=[0, 2, 3, 5, 7], conf=conf, verbose=False)
+    def detect_hazards(self, frame, conf=0.10):
+        """Ultra-Sensitive Detection ($conf=0.10$) for 3-layer obstruction."""
+        # We drop confidence to 10% because through 3 layers, 
+        # YOLO only sees faint shadows of objects.
+        results = self.model(frame, classes=[0, 2, 3, 5, 7], conf=conf, iou=0.4, verbose=False)
         valid_boxes = []
         
         for box in results[0].boxes:
             coords = box.xyxy[0].tolist()
-            w = coords[2] - coords[0]
-            h = coords[3] - coords[1]
+            w, h = (coords[2] - coords[0]), (coords[3] - coords[1])
             area = w * h
-            
-            # SRS Optimization: 1200 is the sweet spot for a 320x240 frame
-            if area > 1200: 
+            frame_area = frame.shape[0] * frame.shape[1]
+
+            # Catch even tiny or distant shadows
+            if area > frame_area * 0.004: 
                 valid_boxes.append(box)
         
         results[0].boxes = valid_boxes
         return results[0]
 
     def get_visibility_score(self, frame):
+        """SDS Visibility Metric: High Std-Dev = Clear, Low = Foggy/Plastic"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Calculate Contrast & Brightness
-        contrast = np.std(gray)
-        brightness = np.mean(gray)
-        
-        # Penalize high brightness to detect the "white-out" effect
-        score = (contrast * 3.0) - (brightness * 0.1)
+        # More robust math for visibility
+        std = np.std(gray)
+        mean = np.mean(gray)
+        # Score is high contrast minus the glare of the plastic
+        score = (std * 4.0) - (mean * 0.15)
         return int(np.clip(score, 0, 100))
-
-
-if __name__ == "__main__":
-    # Test with local paths
-    print("Backend check complete.")
+    

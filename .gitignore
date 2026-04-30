@@ -1,10 +1,11 @@
-# Ignore virtual environments
-.venv/
-env/
-
-# Ignore Python cache files
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 
-# Ignore Database files (Optional, but good practice so you don't upload test data)
+# Local Databases
 *.db
+*.sqlite3
+
+# Environment/OS
+.DS_Store
+venv/

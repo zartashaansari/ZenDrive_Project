@@ -7,6 +7,9 @@ import datetime
 import json
 from backend import DatabaseManager, AIEngine
 import os
+CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+
+
 
 # Global Theme Configuration per SDS Design Decision 4.5
 ctk.set_appearance_mode("Dark") 
@@ -16,20 +19,22 @@ ctk.set_default_color_theme("green")
 # Update the DatabaseManager call to find the DB in the root folder
 class ZenDriveApp(ctk.CTk):
     def __init__(self):
-        super().__init__()
-        # Geometry must come first
+        
+        super().__init__() # Must be first
+        
+        # 1. Geometry & Title
         self.geometry("1000x700")
         self.title("ZenDrive - AI-Powered Smart Road Visibility System")
-        
-        # --- THE FIX: Make base_dir a class variable (self.base_dir) ---
-        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(self.base_dir, "smog_project.db")
 
-        # Initialize Database and AI Engine
-        self.db = DatabaseManager(db_path)
-        print(f"CRITICAL: System is writing to: {db_path}")
+        self.db = DatabaseManager(CONNECTION_STRING)
+       
+            
         self.ai = AIEngine()
         
+        # 3. Path resolution for Assets (Icons/Logos)
+        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # 4. State Variables
         self.current_user = None
         self.is_running = False
         self.prev_time = 0
@@ -42,7 +47,7 @@ class ZenDriveApp(ctk.CTk):
         self.prev_frame_time = 0  
         self.new_frame_time = 0   
 
-        # Start the app sequence
+        # 5. Start the app sequence
         self.update() 
         self.show_splash()
     def clear_screen(self):
@@ -293,44 +298,50 @@ class ZenDriveApp(ctk.CTk):
     def update_frame(self):
         if not self.is_running: return
         
-        # 1. Grab the frame
+        # 1. Grab the camera frame
         ret, frame = self.cap.read()
         if not ret:
             self.after(10, self.update_frame)
             return
 
         try:
-            # --- START AI LOGIC ---
             start_time = time.time()
-            
-            # AI uses a small frame for speed
-            ai_frame = cv2.resize(frame, (320, 240)) 
             
             if not hasattr(self, 'process_toggle'): self.process_toggle = True
             self.process_toggle = not self.process_toggle
             
+            # --- AI PROCESSING BLOCK ---
             if self.process_toggle:
-                # Heavy math every other frame
-                enhanced = self.ai.enhance_frame(ai_frame)
+                # STEP 1: Aggressive Enhancement (Triple-Pass)
+                # We enhance the frame BEFORE resizing so no detail is lost
+                enhanced = self.ai.enhance_frame(frame)
+                
+                # STEP 2: Resize Enhanced Frame for YOLO (320x320 is optimal for speed)
+                ai_input = cv2.resize(enhanced, (320, 320))
+                
+                # STEP 3: Visibility Scoring
                 score = self.ai.get_visibility_score(frame) 
                 self.last_known_score = score
                 self.session_scores.append(score)
                 
-                current_conf = 0.45 if score < 35 else 0.25
-                self.latest_results = self.ai.detect_hazards(enhanced, conf=current_conf)
+                # STEP 4: Sensitive Detection (Lowered conf for 3-layer plastic)
+                # If visibility is bad (<40), we drop confidence to 0.12 to catch blurry objects
+                current_conf = 0.12 if score < 40 else 0.25
+                self.latest_results = self.ai.detect_hazards(ai_input, conf=current_conf)
 
-            # --- RENDERING & ALERT LOGIC ---
+            # --- RENDERING LOGIC ---
+            # We display the original frame (or annotated version) on the UI
             display_frame = frame.copy()
 
             if hasattr(self, 'latest_results') and self.latest_results is not None:
+                # Draw the boxes on the display frame
                 annotated = self.latest_results.plot()
                 display_frame = cv2.resize(annotated, (850, 480))
                 
-                # Update total hazards for the session save
                 hazard_count = len(self.latest_results.boxes)
                 self.max_hazards_in_session = max(self.max_hazards_in_session, hazard_count)
 
-                # Update the Visual Status Bar
+                # Update Visual Status Bar based on score and hazards
                 if hazard_count > 0 and self.last_known_score < 40:
                     status_text, status_color = "🚨 EXTREME DANGER: CLOSE HAZARD", "red"
                 elif hazard_count > 0:
@@ -342,39 +353,43 @@ class ZenDriveApp(ctk.CTk):
 
                 self.vis_label.configure(text=status_text, text_color=status_color)
                 
-                # Smart Audio Warnings & Event Logging
+                # --- SMART AUDIO & EVENT LOGGING ---
                 current_time = time.time()
-                if current_time - self.last_alert_time > 4:
-                    if hazard_count > getattr(self, 'prev_hazard_count', 0):
-                        # Play the Audio
-                        if self.last_known_score < 40:
-                            self.ai.speak("Emergency. New obstacle in fog.")
-                        else:
-                            self.ai.speak("Warning. New obstacle detected.")
+                if current_time - self.last_alert_time > 2: # 2 second cooldown
+                    if hazard_count > 0:
+                        # Get the highest confidence hazard
+                        highest_box = max(self.latest_results.boxes, key=lambda b: b.conf[0].item())
+                        class_id = int(highest_box.cls[0].item())
+                        
+                        # Only alert if this is a NEW hazard type or enough time has passed
+                        last_seen = self.ai.hazard_memory.get(class_id, 0)
+                        if (current_time - last_seen) > self.ai.memory_timeout:
                             
-                        # --- NEW: SDS HAZARD EVENT LOGGING ---
-                        # Initialize the RAM list if it doesn't exist yet
-                        if not hasattr(self, 'session_hazards'):
-                            self.session_hazards = []
+                            # Play Native Mac Audio (Crystal Clear)
+                            if self.last_known_score < 40:
+                                self.ai.speak("Emergency. New obstacle in fog.")
+                            else:
+                                self.ai.speak("Warning. New obstacle detected.")
                             
-                        # Extract data from the most prominent hazard on screen
-                        if hazard_count > 0:
-                            highest_conf_box = max(self.latest_results.boxes, key=lambda b: b.conf[0].item())
-                            class_id = int(highest_conf_box.cls[0].item())
-                            type_name = self.ai.model.names[class_id] # Gets 'person', 'car', etc.
-                            conf_val = float(highest_conf_box.conf[0].item())
+                            # Record the event for the Database
+                            if not hasattr(self, 'session_hazards'): self.session_hazards = []
+                            
+                            type_name = self.ai.model.names[class_id]
+                            conf_val = float(highest_box.conf[0].item())
                             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             
-                            # Add to our RAM list (Setting GPS to 0.0 for now)
-                            self.session_hazards.append((timestamp, type_name, conf_val, 0.0, 0.0))
-
-                        self.last_alert_time = current_time
-                    self.prev_hazard_count = hazard_count
+                            # Log to RAM and Cloud/Local DB
+                            hazard_data = (timestamp, type_name, conf_val, 0.0, 0.0)
+                            self.session_hazards.append(hazard_data)
+                            
+                            # Update memory tracker
+                            self.ai.hazard_memory[class_id] = current_time
+                            self.last_alert_time = current_time
 
             else:
                 display_frame = cv2.resize(display_frame, (850, 480))
 
-            # UI Conversion for CustomTkinter
+            # UI Conversion
             img_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(img_rgb)
             ctk_img = ctk.CTkImage(light_image=img_pil, dark_image=img_pil, size=(850, 480))
@@ -382,12 +397,12 @@ class ZenDriveApp(ctk.CTk):
             self.video_stream.configure(image=ctk_img)
             self.video_stream.image = ctk_img
 
-            # --- PERFORMANCE STATS ---
+            # Performance Metrics
             latency = (time.time() - start_time) * 1000
-            current_time = time.time()
-            prev = getattr(self, 'prev_time', current_time - 0.03)
-            fps = 1 / (current_time - prev) if (current_time - prev) > 0 else 0
-            self.prev_time = current_time
+            curr_t = time.time()
+            prev_t = getattr(self, 'prev_time', curr_t - 0.03)
+            fps = 1 / (curr_t - prev_t) if (curr_t - prev_t) > 0 else 0
+            self.prev_time = curr_t
             
             self.fps_txt.configure(text=f"FPS: {fps:.1f} | Latency: {latency:.0f}ms")
             self.time_txt.configure(text=f"| Time : {datetime.datetime.now().strftime('%H:%M')}")
@@ -395,8 +410,8 @@ class ZenDriveApp(ctk.CTk):
         except Exception as e:
             print(f"Update Loop Error: {e}")
 
-        self.after(1, self.update_frame)
-
+        # Use 10ms delay to keep UI responsive on Mac Air
+        self.after(10, self.update_frame)
 
     # --- SCREEN 5: SETTINGS PAGE (PRECISION GRID ALIGNMENT) ---
     def show_settings(self):
