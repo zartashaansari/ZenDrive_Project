@@ -84,9 +84,6 @@ docker build -t zendrive .
 
 Run the following command to deploy the AI container, linking the display and audio streams back to the Windows host:
 In terminal/bash:
-docker run -it --rm \
-  -e DISPLAY=host.docker.internal:0.0 \
-  -e PULSE_SERVER=tcp:host.docker.internal:4713 \
-  zendrive
+docker run -it --rm -e DISPLAY=host.docker.internal:0.0 -e PULSE_SERVER=tcp:host.docker.internal:4713 zendrive
 
 *(Note: To bypass WSL2 USB-passthrough limitations during containerized demonstration, the system defaults to processing demo_video.mp4 within the Docker environment).*
