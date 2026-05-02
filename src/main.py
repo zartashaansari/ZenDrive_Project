@@ -64,7 +64,7 @@ class ZenDriveApp(ctk.CTk):
             
             logo_image = ctk.CTkImage(light_image=Image.open(logo_path),
                                       dark_image=Image.open(logo_path),
-                                      size=(150, 150))
+                                      size=(210, 200))
             self.logo_display = ctk.CTkLabel(self, image=logo_image, text="")
             self.logo_display.pack(pady=(80, 10))
         except Exception as e:

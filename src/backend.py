@@ -37,9 +37,14 @@ class DatabaseManager:
             email TEXT,
             password_hash TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            preferences TEXT
+            preferences TEXT,
+           is_active INTEGER DEFAULT 0
         )''')
-        
+        try:
+         cur.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 0")
+        except Exception:
+         pass  # column already exists
+
         cur.execute(f'''CREATE TABLE IF NOT EXISTS trip_sessions (
             session_id {id_type},
             user_id INTEGER,
@@ -134,16 +139,43 @@ class DatabaseManager:
         except Exception as e:
             print(f"Hazard Save Error: {e}")
 
+    # def get_admin_stats(self):
+    #     cur = self.conn.cursor()
+    #     cur.execute("SELECT COUNT(DISTINCT user_id) FROM trip_sessions WHERE end_time IS NULL")
+    #     active = cur.fetchone()[0]
+    #     cur.execute("SELECT COUNT(*) FROM hazard_events")
+    #     hazards = cur.fetchone()[0]
+    #     cur.execute("SELECT AVG(avg_visibility) FROM trip_sessions")
+    #     vis = cur.fetchone()[0]
+    #     return active, hazards, round(float(vis or 0), 1)
     def get_admin_stats(self):
-        cur = self.conn.cursor()
-        cur.execute("SELECT COUNT(DISTINCT user_id) FROM trip_sessions WHERE end_time IS NULL")
-        active = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM hazard_events")
-        hazards = cur.fetchone()[0]
-        cur.execute("SELECT AVG(avg_visibility) FROM trip_sessions")
-        vis = cur.fetchone()[0]
-        return active, hazards, round(float(vis or 0), 1)
+     cur = self.conn.cursor()
 
+    # Active users
+     cur.execute("""
+        SELECT COUNT(DISTINCT user_id)
+        FROM trip_sessions
+        WHERE end_time IS NULL
+    """)
+     active = cur.fetchone()[0]
+
+    # ✅ Live hazards (PostgreSQL syntax)
+     cur.execute("""
+        SELECT COUNT(*)
+        FROM hazard_events
+        WHERE timestamp >= NOW() - INTERVAL '1 minute'
+    """)
+     hazards = cur.fetchone()[0]
+
+    # Visibility
+     cur.execute("""
+        SELECT AVG(avg_visibility)
+        FROM trip_sessions
+    """)
+     vis = cur.fetchone()[0]
+
+     return active, hazards, round(float(vis or 0), 1)
+ 
     def get_all_users(self):
         cur = self.conn.cursor()
         cur.execute("SELECT user_id, username, email, created_at, preferences FROM users")
@@ -173,6 +205,34 @@ class DatabaseManager:
         cur = self.conn.cursor()
         cur.execute(query)
         return cur.fetchall()
+    
+    def get_active_users(self):
+        cur = self.conn.cursor()
+        cur.execute("SELECT user_id, username FROM users WHERE is_active = 1")
+        return cur.fetchall()
+    
+    def get_live_hazards(self):
+        cur = self.conn.cursor()
+        cur.execute("""
+        SELECT type, timestamp, confidence
+        FROM hazard_events
+        ORDER BY timestamp DESC
+        LIMIT 20
+    """)
+        return cur.fetchall()
+
+    def reset_live_hazards(self):
+        self.active_hazards = 0
+    
+    def set_user_active(self, user_id):
+        cur = self.conn.cursor()
+        cur.execute("UPDATE users SET is_active = 1 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
+    def set_user_inactive(self, user_id):
+        cur = self.conn.cursor()
+        cur.execute("UPDATE users SET is_active = 0 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
 import os
 import subprocess
 class AIEngine:
@@ -191,34 +251,36 @@ class AIEngine:
 
         self.prefs = prefs_dict
     def speak(self, text):
-        """Zero-Latency Mac 'say' implementation"""
-        # If the AI is currently talking, don't queue more sounds to avoid lag
-        if self.is_speaking:
-            return 
+     if self.is_speaking:
+        return 
 
-        def run_speech():
-            self.is_speaking = True
-            try:
-                # 1. Clean the string for the shell
+     def run_speech():
+        self.is_speaking = True
+        try:
+            import os
+
+            # 👉 WINDOWS
+            if os.name == "nt":
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.setProperty('rate', 180)
+                engine.say(text)
+                engine.runAndWait()
+
+            # 👉 MAC / LINUX
+            else:
                 safe_text = text.replace('"', '').replace("'", "")
-                
-                # 2. Get preferences
                 voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
-                # Use a slightly faster rate to make the response feel snappier
                 rate = "240" if self.prefs.get("tone") == "Assertive" else "200"
-                
-                # 3. USE POPEN: This 'fires and forgets', so it doesn't wait
-                # We add '&&' to reset the is_speaking flag only after it finishes
                 subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
-                
-                # Add a short mandatory 'silence' buffer to prevent sound overlap
-                time.sleep(1.2) 
-            except Exception as e:
-                print(f"Mac Audio Lag Fix Error: {e}")
-            finally:
-                self.is_speaking = False
+                time.sleep(1.2)
 
-        threading.Thread(target=run_speech, daemon=True).start()
+        except Exception as e:
+            print(f"Audio Error: {e}")
+        finally:
+          self.is_speaking = False
+
+     threading.Thread(target=run_speech, daemon=True).start()
     # def speak(self, text):
     # #    """Zero-Latency Mac 'say' implementation"""
     #     # If the AI is currently talking, don't queue more sounds to avoid lag
@@ -311,7 +373,7 @@ class AIEngine:
         
         results[0].boxes = valid_boxes
         return results[0]
-
+        
     def get_visibility_score(self, frame):
         """SDS Visibility Metric: High Std-Dev = Clear, Low = Foggy/Plastic"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

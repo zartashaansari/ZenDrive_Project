@@ -20,3 +20,4 @@ numpy
 pyttsx3
 pypiwin32
 matplotlib
+psycopg2-binary
