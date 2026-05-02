@@ -1,4 +1,6 @@
 
+# ZenDrive: AI-Powered Smart Road Visibility & Hazard Detection System
+
  **Overview:** ZenDrive is a desktop application designed to improve driver safety in heavy smog, fog, or low-light conditions. It processes live camera feeds using image enhancement techniques and AI to detect and warn drivers of potential road hazards in real-time.
 
 ### ✨ Key Features
