@@ -10,10 +10,10 @@ from backend import DatabaseManager, AIEngine
 import os
 
 # FOR NATIVE RUN
-# CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
 
 # FOR DOCKER 
-CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+# CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
 
 # Global Theme Configuration per SDS Design Decision
 ctk.set_appearance_mode("Dark") 
