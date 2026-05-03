@@ -1,3 +1,4 @@
+
 import customtkinter as ctk
 from admin_panel import AdminDashboard
 from PIL import Image, ImageTk
@@ -7,16 +8,17 @@ import datetime
 import json
 from backend import DatabaseManager, AIEngine
 import os
-CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
 
+# FOR NATIVE RUN
+# CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
 
+# FOR DOCKER 
+CONNECTION_STRING = "postgresql://zartasha:gmo7HTau_hh-7dJhHXOg2Q@zendrive-cluster-15355.jxf.gcp-asia-south1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
 
-# Global Theme Configuration per SDS Design Decision 4.5
+# Global Theme Configuration per SDS Design Decision
 ctk.set_appearance_mode("Dark") 
 ctk.set_default_color_theme("green")
 
-# Inside main.py (Top of the file)
-# Update the DatabaseManager call to find the DB in the root folder
 class ZenDriveApp(ctk.CTk):
     def __init__(self):
         
@@ -27,7 +29,6 @@ class ZenDriveApp(ctk.CTk):
         self.title("ZenDrive - AI-Powered Smart Road Visibility System")
 
         self.db = DatabaseManager(CONNECTION_STRING)
-       
             
         self.ai = AIEngine()
         
@@ -50,11 +51,11 @@ class ZenDriveApp(ctk.CTk):
         # 5. Start the app sequence
         self.update() 
         self.show_splash()
+
     def clear_screen(self):
         """Cleans the UI by destroying all widgets currenty on screen."""
         for widget in self.winfo_children():
             widget.destroy()
-    # Update the Splash Screen Logo Path
 
     def show_splash(self):
         self.clear_screen()
@@ -73,12 +74,10 @@ class ZenDriveApp(ctk.CTk):
         # Page Title
         ctk.CTkLabel(self, text="ZenDrive", font=("Roboto", 48, "bold"), text_color="#2CC985").pack(pady=(10, 5))
         
-        # FIXED: Updated subtitle to match the screenshot exactly (bold and italic)
         self.sub_label = ctk.CTkLabel(self, text="AI-Powered Smart Road Visibility & Hazard Detection System", font=("Roboto", 18, "bold","italic"))
         self.sub_label.pack(pady=(0, 40))
 
-        # --- THE FIX: Progress Container ---
-        # We put the bar and the text inside a transparent frame so they left-align perfectly
+        # --- Progress Container ---
         prog_frame = ctk.CTkFrame(self, fg_color="transparent")
         prog_frame.pack(pady=10)
 
@@ -86,7 +85,7 @@ class ZenDriveApp(ctk.CTk):
         self.progress.pack(anchor="w")
         self.progress.set(0)
         
-        # Loading text label (anchored to the west/left)
+        # Loading text label
         self.loading_text = ctk.CTkLabel(prog_frame, text="Initializing Object Detection Module...", font=("Roboto", 12, "italic"), text_color="#AAAAAA", justify="left")
         self.loading_text.pack(anchor="w", pady=(5, 0))
         
@@ -98,8 +97,7 @@ class ZenDriveApp(ctk.CTk):
             val += 0.05
             self.progress.set(val)
             
-            # --- THE FIX: Dynamic text appending ---
-            # Adds the lines sequentially as the progress bar moves
+            # --- Dynamic text appending ---
             if 0.3 < val < 0.7:
                 self.loading_text.configure(text="Initializing Object Detection Module...\nInitializing Dehazing Module...")
             elif val >= 0.7:
@@ -110,8 +108,7 @@ class ZenDriveApp(ctk.CTk):
         else:
             self.show_login()
 
-
-    # --- SCREEN 2: LOGIN PAGE ---
+    # HANDLING LOGIN FUNCTIONALITY
     def show_login(self, message="", color="green"):
         self.clear_screen()
         frame = ctk.CTkFrame(self, width=450, height=500, corner_radius=15)
@@ -134,7 +131,6 @@ class ZenDriveApp(ctk.CTk):
         pwd_input = self.login_pass.get()
 
         # --- HARDCODED ADMIN CHECK ---
-        # We check this first to bypass standard driver logic
         if user_input == "admin" and pwd_input == "admin123":
             print("Admin Access Granted.")
             self.current_user_id = 0
@@ -143,7 +139,6 @@ class ZenDriveApp(ctk.CTk):
             # Reset UI scaling/theme to default for Admin
             ctk.set_appearance_mode("Dark")
             ctk.set_widget_scaling(1.0)
-            ctk.set_window_scaling(1.0)
 
             # Import and launch the separate Admin Panel
             from admin_panel import AdminDashboard
@@ -151,36 +146,31 @@ class ZenDriveApp(ctk.CTk):
             self.admin_view.draw()
             return # Exit function so it doesn't run driver logic below
 
-        # --- EXISTING DRIVER LOGIC (Untouched) ---
+        # --- DRIVER LOGIC ---
         user_data = self.db.verify_login(user_input, pwd_input)
         
         if user_data:
-            # user_data[0] is ID, [1] is username, [5] is the preferences JSON string
             self.current_user_id = user_data[0] 
             self.current_username = user_data[1]
             
-            # --- NEW: Load and Apply Preferences ---
+            # --- Load and Apply Preferences ---
             try:
                 prefs_json = user_data[5]
                 self.current_prefs = json.loads(prefs_json)
             except Exception:
-                # Fallback default if something breaks
                 self.current_prefs = {"theme": "Dark", "font": "Medium", "voice": "Male", "vol": 70.0, "tone": "Calm", "lang": "English"}
             
             # 1. Apply the Theme instantly upon login!
             ctk.set_appearance_mode(self.current_prefs.get("theme", "Dark"))
 
-            # --- NEW: Global UI Scaling for Font Size ---
+            # --- Global UI Scaling for Font Size (Window Scaling Removed) ---
             font_pref = self.current_prefs.get("font", "Medium")
             if font_pref == "Small":
                 ctk.set_widget_scaling(0.85)
-                ctk.set_window_scaling(0.85)
             elif font_pref == "Large":
                 ctk.set_widget_scaling(1.15)
-                ctk.set_window_scaling(1.15)
             else: # Medium
                 ctk.set_widget_scaling(1.0)
-                ctk.set_window_scaling(1.0)
             
             # 2. Send the preferences to the AI Engine for the audio
             self.ai.set_preferences(self.current_prefs)
@@ -231,23 +221,27 @@ class ZenDriveApp(ctk.CTk):
         # --- Record start time ---
         self.trip_start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # NEW: Register the active session in the DB immediately
-        # This returns the ID so we can update it later when the trip ends
+        # Register the active session in the DB immediately
         self.current_session_id = self.db.create_active_session(
             self.current_user_id, 
             self.trip_start_time
         )
         
-        
         # Start with index 1 (iPhone), but allow it to be dynamic
         if not hasattr(self, 'current_cam_index'):
             self.current_cam_index = 1 
-            
-        self.cap = cv2.VideoCapture(self.current_cam_index) 
+
+         # //For Native RUN   
+        # self.cap = cv2.VideoCapture(self.current_cam_index) 
+
+        # //For DOCKER RUN
+        self.cap = cv2.VideoCapture("assets/test_videoo" \
+        "o.mp4") 
+
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # 1. HEADER SECTION (Packed to the Top)
+        # 1. HEADER SECTION
         header = ctk.CTkFrame(self, height=80, fg_color="transparent")
         header.pack(side="top", fill="x", padx=20, pady=10)
 
@@ -260,9 +254,7 @@ class ZenDriveApp(ctk.CTk):
         cam_switch_btn = ctk.CTkButton(header, text="🔄 Cam", width=70, fg_color="#444", command=self.cycle_camera)
         cam_switch_btn.pack(side="right", padx=10)
 
-        # 2. FOOTER SECTION (Packed to the Bottom FIRST)
-        # THE FIX: By packing this before the video stream, it secures its space 
-        # and cannot be pushed off the screen by the Large font scaling!
+        # 2. FOOTER SECTION 
         footer = ctk.CTkFrame(self, height=50, fg_color="transparent")
         footer.pack(side="bottom", fill="x", padx=40, pady=20)
 
@@ -275,17 +267,15 @@ class ZenDriveApp(ctk.CTk):
         self.time_txt = ctk.CTkLabel(footer, text="| Time : 00:00", font=("Roboto", 18, "bold"), text_color="#2CC985")
         self.time_txt.pack(side="left", padx=20)
 
-        # 3. VIDEO BODY (Packed in the Middle)
-        # Because the header and footer are already locked in place, this will perfectly fill the remaining space.
+        # 3. VIDEO BODY
         self.video_stream = ctk.CTkLabel(self, text="", corner_radius=10, fg_color="#333")
         self.video_stream.pack(expand=True, fill="both", padx=40, pady=10)
 
         self.update_frame()
 
-    # --- NEW HELPER FUNCTION: Add this to the ZenDriveApp class ---
+    # --- HELPER FUNCTION: ---
     def cycle_camera(self):
         """Cycles only between the 2 available cameras on your Mac Air"""
-        # Change the % 3 to % 2 so it only toggles 0 and 1
         self.current_cam_index = (self.current_cam_index + 1) % 2 
         print(f"DEBUG: Switching to Camera Index {self.current_cam_index}")
         
@@ -312,31 +302,27 @@ class ZenDriveApp(ctk.CTk):
             
             # --- AI PROCESSING BLOCK ---
             if self.process_toggle:
-                # STEP 1: Aggressive Enhancement (Triple-Pass)
-                # We enhance the frame BEFORE resizing so no detail is lost
                 enhanced = self.ai.enhance_frame(frame)
-                
-                # STEP 2: Resize Enhanced Frame for YOLO (320x320 is optimal for speed)
                 ai_input = cv2.resize(enhanced, (320, 320))
                 
-                # STEP 3: Visibility Scoring
                 score = self.ai.get_visibility_score(frame) 
                 self.last_known_score = score
                 self.session_scores.append(score)
                 
-                # STEP 4: Sensitive Detection (Lowered conf for 3-layer plastic)
-                # If visibility is bad (<40), we drop confidence to 0.12 to catch blurry objects
                 current_conf = 0.12 if score < 40 else 0.25
                 self.latest_results = self.ai.detect_hazards(ai_input, conf=current_conf)
 
+            # --- DYNAMIC VIDEO SIZING ---
+            font_pref = getattr(self, 'current_prefs', {}).get("font", "Medium")
+            vid_w, vid_h = (750, 420) if font_pref == "Large" else (850, 480)
+
             # --- RENDERING LOGIC ---
-            # We display the original frame (or annotated version) on the UI
             display_frame = frame.copy()
 
             if hasattr(self, 'latest_results') and self.latest_results is not None:
                 # Draw the boxes on the display frame
                 annotated = self.latest_results.plot()
-                display_frame = cv2.resize(annotated, (850, 480))
+                display_frame = cv2.resize(annotated, (vid_w, vid_h))
                 
                 hazard_count = len(self.latest_results.boxes)
                 self.max_hazards_in_session = max(self.max_hazards_in_session, hazard_count)
@@ -357,42 +343,36 @@ class ZenDriveApp(ctk.CTk):
                 current_time = time.time()
                 if current_time - self.last_alert_time > 2: # 2 second cooldown
                     if hazard_count > 0:
-                        # Get the highest confidence hazard
                         highest_box = max(self.latest_results.boxes, key=lambda b: b.conf[0].item())
                         class_id = int(highest_box.cls[0].item())
                         
-                        # Only alert if this is a NEW hazard type or enough time has passed
                         last_seen = self.ai.hazard_memory.get(class_id, 0)
                         if (current_time - last_seen) > self.ai.memory_timeout:
                             
-                            # Play Native Mac Audio (Crystal Clear)
                             if self.last_known_score < 40:
                                 self.ai.speak("Emergency. New obstacle in fog.")
                             else:
                                 self.ai.speak("Warning. New obstacle detected.")
                             
-                            # Record the event for the Database
                             if not hasattr(self, 'session_hazards'): self.session_hazards = []
                             
                             type_name = self.ai.model.names[class_id]
                             conf_val = float(highest_box.conf[0].item())
                             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             
-                            # Log to RAM and Cloud/Local DB
                             hazard_data = (timestamp, type_name, conf_val, 0.0, 0.0)
                             self.session_hazards.append(hazard_data)
                             
-                            # Update memory tracker
                             self.ai.hazard_memory[class_id] = current_time
                             self.last_alert_time = current_time
 
             else:
-                display_frame = cv2.resize(display_frame, (850, 480))
+                display_frame = cv2.resize(display_frame, (vid_w, vid_h))
 
             # UI Conversion
             img_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(img_rgb)
-            ctk_img = ctk.CTkImage(light_image=img_pil, dark_image=img_pil, size=(850, 480))
+            ctk_img = ctk.CTkImage(light_image=img_pil, dark_image=img_pil, size=(vid_w, vid_h))
             
             self.video_stream.configure(image=ctk_img)
             self.video_stream.image = ctk_img
@@ -413,19 +393,15 @@ class ZenDriveApp(ctk.CTk):
         # Use 10ms delay to keep UI responsive on Mac Air
         self.after(10, self.update_frame)
 
-    # --- SCREEN 5: SETTINGS PAGE (PRECISION GRID ALIGNMENT) ---
+    # --- SCREEN 5: SETTINGS PAGE ---
     def show_settings(self):
         self.is_running = False
         if hasattr(self, 'cap'): self.cap.release()
         self.clear_screen()
 
         prefs = getattr(self, 'current_prefs', {})
-
-        # 1. Page Title (Packed to the Top)
         ctk.CTkLabel(self, text="SETTINGS", font=("Roboto", 36, "bold"), text_color="#2CC985").pack(pady=(20, 10))
 
-        # --- THE FIX: Pack Footer Buttons FIRST ---
-        # By packing these to the bottom now, the scrollable frame cannot push them off screen!
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(side="bottom", fill="x", pady=20, padx=20)
 
@@ -434,7 +410,7 @@ class ZenDriveApp(ctk.CTk):
                 "vol": self.vol_slider.get(),
                 "tone": self.tone_var.get(),
                 "voice": self.voice_var.get(),
-                "lang": self.lang_var.get()
+                "lang": "English" # Defaulted
             }
             self.ai.set_preferences(live_prefs)
             self.ai.speak("System test successful.")
@@ -448,7 +424,6 @@ class ZenDriveApp(ctk.CTk):
         ctk.CTkButton(btn_frame, text="Cancel", fg_color="#444", width=120, 
                       command=self.show_dashboard).pack(side="right")
 
-        # 3. Main Scrollable Container (Packed in the Middle)
         container = ctk.CTkScrollableFrame(self, corner_radius=10, fg_color="transparent")
         container.pack(pady=10, padx=20, fill="both", expand=True)
 
@@ -491,61 +466,44 @@ class ZenDriveApp(ctk.CTk):
         ctk.CTkRadioButton(aud_frame, text="Assertive", variable=self.tone_var, value="Assertive").grid(row=1, column=1, padx=20)
         ctk.CTkRadioButton(aud_frame, text="Calm", variable=self.tone_var, value="Calm").grid(row=1, column=2, padx=20)
 
-        # Row 2: Alert Language (FIXED: Replaced buggy Dropdown with clean Radio Buttons)
-        ctk.CTkLabel(aud_frame, text="Alert Language:", font=("Roboto", 14, "bold")).grid(row=2, column=0, sticky="w", pady=10)
-        self.lang_var = ctk.StringVar(value=prefs.get("lang", "English"))
-        
-        ctk.CTkRadioButton(aud_frame, text="English", variable=self.lang_var, value="English").grid(row=2, column=1, padx=20)
-        ctk.CTkRadioButton(aud_frame, text="French", variable=self.lang_var, value="French").grid(row=2, column=2, padx=20)
-
-
-        ctk.CTkLabel(aud_frame, text="Alert Volume:", font=("Roboto", 14, "bold")).grid(row=3, column=0, sticky="w", pady=15)
+        ctk.CTkLabel(aud_frame, text="Alert Volume:", font=("Roboto", 14, "bold")).grid(row=2, column=0, sticky="w", pady=15)
         vol_container = ctk.CTkFrame(aud_frame, fg_color="transparent")
-        vol_container.grid(row=3, column=1, columnspan=3, sticky="w", padx=10)
+        vol_container.grid(row=2, column=1, columnspan=3, sticky="w", padx=10)
         ctk.CTkLabel(vol_container, text="🔊", font=("Roboto", 18)).pack(side="left", padx=5)
         self.vol_slider = ctk.CTkSlider(vol_container, from_=0, to=100, width=350, button_color="#2CC985")
         self.vol_slider.set(prefs.get("vol", 70.0))
         self.vol_slider.pack(side="left")
-
-        
+    
     def save_and_exit(self):
         try:
-            # 1. Grab raw values
             theme_val = getattr(self, 'theme_var', ctk.StringVar(value="Dark")).get()
             font_val = getattr(self, 'font_var', ctk.StringVar(value="Medium")).get()
             voice_val = getattr(self, 'voice_var', ctk.StringVar(value="Male")).get()
             vol_val = getattr(self, 'vol_slider', ctk.CTkSlider(master=self)).get() if hasattr(self, 'vol_slider') else 70.0
             tone_val = getattr(self, 'tone_var', ctk.StringVar(value="Calm")).get()
-            lang_val = getattr(self, 'lang_var', ctk.StringVar(value="English")).get()
 
             prefs = {
                 "theme": theme_val, "font": font_val, "voice": voice_val, 
-                "vol": vol_val, "tone": tone_val, "lang": lang_val
+                "vol": vol_val, "tone": tone_val, "lang": "English" # Defaulted here
             }
             
-            # 2. Save to Database
             username = getattr(self, 'current_username', getattr(self, 'current_user', 'Unknown'))
             self.db.update_user_preferences(username, json.dumps(prefs))
             
-            # 3. Update AI Engine safely
             self.current_prefs = prefs
             if hasattr(self.ai, 'set_preferences'):
                 self.ai.set_preferences(prefs) 
             
-            # 4. Apply Visual Scale (100% Safe now that Dropdown is gone)
             ctk.set_appearance_mode(theme_val)
             
+            # WINDOW SCALING REMOVED HERE
             if font_val == "Small":
                 ctk.set_widget_scaling(0.85)
-                ctk.set_window_scaling(0.85)
             elif font_val == "Large":
                 ctk.set_widget_scaling(1.15)
-                ctk.set_window_scaling(1.15)
             else:
                 ctk.set_widget_scaling(1.0)
-                ctk.set_window_scaling(1.0)
                 
-            # 5. Load the Dashboard
             self.show_dashboard()
             
         except Exception as e:
@@ -587,6 +545,7 @@ class ZenDriveApp(ctk.CTk):
             self.show_login(f"Success! Session & Events saved.", "green")
         else:
             self.show_login("Error saving trip data.", "red")
+
 if __name__ == "__main__":
     app = ZenDriveApp()
     app.mainloop()

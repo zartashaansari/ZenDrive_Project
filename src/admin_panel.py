@@ -39,17 +39,17 @@ class AdminDashboard:
             font=("Roboto", 12, "bold")
         ).pack()
 
-        # Labels for live updates
+        # Labels for Title Bar
         self.user_label = ctk.CTkLabel(
             header,
-            text=f"Active Users: __{u}__",
+            text=f"Total Users: __{u}__",
             font=("Roboto", 14, "bold")
         )
         self.user_label.pack(side="left", expand=True)
 
         self.hazard_label = ctk.CTkLabel(
             header,
-            text=f"Critical Hazards: __{h}__",
+            text=f"Total Hazards: __{h}__",
             font=("Roboto", 14, "bold")
         )
         self.hazard_label.pack(side="left", expand=True)
@@ -185,26 +185,25 @@ class AdminDashboard:
         self.refresh_stats()
         self.refresh_recent_hazards()
 
-    # ---------------- LIVE UPDATE METHODS ----------------
+    # ---------------- ADMIN PANEL METHODS ----------------
 
     def refresh_stats(self):
         """Syncs dashboard stats safely every 1 second."""
-
         try:
-            self.master.after(1000, self.refresh_stats)
-
+            # Check if UI still exists before updating
             if not (hasattr(self, 'user_label') and self.user_label.winfo_exists()):
                 return
        
-            # u = len(self.db.get_active_users())
-            # h = len(self.db.get_live_hazards())
-            # v = self.db.get_admin_stats()[1]
+            # Fetch all-time stats from the backend
             u, h, v = self.db.get_admin_stats()
 
-
-            self.user_label.configure(text=f"Active Users: {u}")
-            self.hazard_label.configure(text=f"Critical Hazards: {h}")
+            # Update the text to reflect "Total"
+            self.user_label.configure(text=f"Total Users: {u}")
+            self.hazard_label.configure(text=f"Total Hazards: {h}")
             self.vis_label.configure(text=f"Average Visibility: {v}%")
+
+            # Reschedule the next update
+            self.master.after(1000, self.refresh_stats)
 
         except Exception as e:
             print(f"Sync Error: {e}")

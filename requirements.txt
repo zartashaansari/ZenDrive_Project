@@ -18,6 +18,5 @@ opencv-python
 ultralytics
 numpy
 pyttsx3
-pypiwin32
-matplotlib
+pypiwin32; sys_platform == 'win32'
 psycopg2-binary

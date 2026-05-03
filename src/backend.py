@@ -71,13 +71,15 @@ class DatabaseManager:
     def _hash_password(self, password):
         return hashlib.sha256(password.encode()).hexdigest()
 
+        
+
     def verify_login(self, username, password):
         p = self._get_p()
         hashed_pwd = self._hash_password(password)
         cur = self.conn.cursor()
         cur.execute(f"SELECT * FROM users WHERE username={p} AND password_hash={p}", (username, hashed_pwd))
         return cur.fetchone()
-
+    
     def register_user(self, username, password, email):
         p = self._get_p()
         hashed_pwd = self._hash_password(password)
@@ -139,42 +141,30 @@ class DatabaseManager:
         except Exception as e:
             print(f"Hazard Save Error: {e}")
 
-    # def get_admin_stats(self):
-    #     cur = self.conn.cursor()
-    #     cur.execute("SELECT COUNT(DISTINCT user_id) FROM trip_sessions WHERE end_time IS NULL")
-    #     active = cur.fetchone()[0]
-    #     cur.execute("SELECT COUNT(*) FROM hazard_events")
-    #     hazards = cur.fetchone()[0]
-    #     cur.execute("SELECT AVG(avg_visibility) FROM trip_sessions")
-    #     vis = cur.fetchone()[0]
-    #     return active, hazards, round(float(vis or 0), 1)
+    # // ADMIN PANEL BACKEND FUNCTIONS
     def get_admin_stats(self):
-     cur = self.conn.cursor()
+        """Fetches all-time global statistics for the Admin Title Bar"""
+        try:
+            cur = self.conn.cursor()
 
-    # Active users
-     cur.execute("""
-        SELECT COUNT(DISTINCT user_id)
-        FROM trip_sessions
-        WHERE end_time IS NULL
-    """)
-     active = cur.fetchone()[0]
+            # 1. Total Registered Users (All users in the database)
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
 
-    # ✅ Live hazards (PostgreSQL syntax)
-     cur.execute("""
-        SELECT COUNT(*)
-        FROM hazard_events
-        WHERE timestamp >= NOW() - INTERVAL '1 minute'
-    """)
-     hazards = cur.fetchone()[0]
+            # 2. Total Critical Hazards (Total events ever recorded)
+            cur.execute("SELECT COUNT(*) FROM hazard_events")
+            total_hazards = cur.fetchone()[0]
 
-    # Visibility
-     cur.execute("""
-        SELECT AVG(avg_visibility)
-        FROM trip_sessions
-    """)
-     vis = cur.fetchone()[0]
+            # 3. Global Average Visibility (Average from all sessions)
+            cur.execute("SELECT AVG(avg_visibility) FROM trip_sessions")
+            avg_vis = cur.fetchone()[0]
 
-     return active, hazards, round(float(vis or 0), 1)
+            cur.close()
+            # Handle cases where visibility might be None (new database)
+            return total_users, total_hazards, round(float(avg_vis or 0), 1)
+        except Exception as e:
+            print(f"Database Stats Error: {e}")
+            return 0, 0, 0.0
  
     def get_all_users(self):
         cur = self.conn.cursor()
@@ -206,39 +196,17 @@ class DatabaseManager:
         cur.execute(query)
         return cur.fetchall()
     
-    def get_active_users(self):
-        cur = self.conn.cursor()
-        cur.execute("SELECT user_id, username FROM users WHERE is_active = 1")
-        return cur.fetchall()
-    
-    def get_live_hazards(self):
-        cur = self.conn.cursor()
-        cur.execute("""
-        SELECT type, timestamp, confidence
-        FROM hazard_events
-        ORDER BY timestamp DESC
-        LIMIT 20
-    """)
-        return cur.fetchall()
-
-    def reset_live_hazards(self):
-        self.active_hazards = 0
-    
-    def set_user_active(self, user_id):
-        cur = self.conn.cursor()
-        cur.execute("UPDATE users SET is_active = 1 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def set_user_inactive(self, user_id):
-        cur = self.conn.cursor()
-        cur.execute("UPDATE users SET is_active = 0 WHERE user_id = ?", (user_id,))
-        self.conn.commit()
 import os
 import subprocess
 class AIEngine:
     def __init__(self):
         # Existing model and CLAHE setup
-        self.model = YOLO("../models/yolov8n.pt")
+        # FOR NATIVE RUN 
+        # self.model = YOLO("../models/yolov8n.pt")
+
+        # Use an absolute path so Docker always finds it(FOR DOCKER IMAGE)
+        self.model = YOLO("/app/models/yolov8n.pt")
+        
         self.model.fuse()
         self.clahe = cv2.createCLAHE(clipLimit=7.0, tileGridSize=(4, 4))
         
@@ -246,93 +214,60 @@ class AIEngine:
         self.is_speaking = False  # The "Muzzle" to prevent lag
         self.hazard_memory = {} 
         self.memory_timeout = 3  # Increased to prevent sound congestion
-
+    
     def set_preferences(self, prefs_dict):
 
         self.prefs = prefs_dict
     def speak(self, text):
-     if self.is_speaking:
-        return 
+        if self.is_speaking:
+            return 
 
-     def run_speech():
-        self.is_speaking = True
-        try:
-            import os
+        def run_speech():
+            self.is_speaking = True
+            try:
+                import os
+                vol = self.prefs.get("vol", 70.0) / 100.0 # Standardize for 0.0-1.0
+                tone_pref = self.prefs.get("tone", "Calm")
 
-            # 👉 WINDOWS
-            if os.name == "nt":
-                import pyttsx3
-                engine = pyttsx3.init()
-                engine.setProperty('rate', 180)
-                engine.say(text)
-                engine.runAndWait()
+                # 👉 WINDOWS (SAPI5)
+                if os.name == "nt":
+                    import pyttsx3
+                    engine = pyttsx3.init()
+                    
+                    # Apply Volume
+                    engine.setProperty('volume', vol)
+                    
+                    # Apply Rate (Tone)
+                    engine.setProperty('rate', 200 if tone_pref == "Assertive" else 150)
+                    
+                    # Apply Voice (Gender)
+                    voices = engine.getProperty('voices')
+                    if self.prefs.get("voice") == "Female" and len(voices) > 1:
+                        engine.setProperty('voice', voices[1].id)
+                    else:
+                        engine.setProperty('voice', voices[0].id)
 
-            # 👉 MAC / LINUX
-            else:
-                safe_text = text.replace('"', '').replace("'", "")
-                voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
-                rate = "240" if self.prefs.get("tone") == "Assertive" else "200"
-                subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
-                time.sleep(1.2)
+                    engine.say(text)
+                    engine.runAndWait()
 
-        except Exception as e:
-            print(f"Audio Error: {e}")
-        finally:
-          self.is_speaking = False
+                # 👉 MAC / LINUX (NSSpeechSynthesizer)
+                else:
+                    safe_text = text.replace('"', '').replace("'", "")
+                    voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
+                    rate = "240" if tone_pref == "Assertive" else "200"
+                    
+                    # Mac 'say' command doesn't have a direct volume flag in simple subprocess, 
+                    # but respects system volume.
+                    subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
+                    time.sleep(1.2)
 
-     threading.Thread(target=run_speech, daemon=True).start()
-    # def speak(self, text):
-    # #    """Zero-Latency Mac 'say' implementation"""
-    #     # If the AI is currently talking, don't queue more sounds to avoid lag
-    #     if self.is_speaking:
-    #         return 
+            except Exception as e:
+                print(f"Audio Error: {e}")
+            finally:
+                self.is_speaking = False
 
-    #     def run_speech():
-    #         self.is_speaking = True
-    #         try:
-    #             # 1. Clean the string for the shell
-    #             safe_text = text.replace('"', '').replace("'", "")
-                
-    #             # 2. Get preferences
-    #             voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
-    #             # Use a slightly faster rate to make the response feel snappier
-    #             rate = "240" if self.prefs.get("tone") == "Assertive" else "200"
-                
-    #             # 3. USE POPEN: This 'fires and forgets', so it doesn't wait
-    #             # We add '&&' to reset the is_speaking flag only after it finishes
-    #             subprocess.Popen(['say', '-v', voice, '-r', rate, safe_text])
-                
-    #             # Add a short mandatory 'silence' buffer to prevent sound overlap
-    #             time.sleep(1.2) 
-    #         except Exception as e:
-    #             print(f"Mac Audio Lag Fix Error: {e}")
-    #         finally:
-    #             self.is_speaking = False
-
-    #     threading.Thread(target=run_speech, daemon=True).start()
-
-        # def run_speech():
-        #     self.is_speaking = True
-        #     try:
-        #         # Clean text
-        #         msg = text.replace('"', '').replace("'", "")
-                
-        #         # Get preferences
-        #         voice = "Samantha" if self.prefs.get("voice") == "Female" else "Alex"
-        #         rate = str(230 if self.prefs.get("tone") == "Assertive" else 190)
-                
-        #         # subprocess.Popen is much faster than os.system because it
-        #         # starts the process and immediately returns control to Python
-        #         subprocess.Popen(['say', '-v', voice, '-r', rate, msg])
-                
-        #         # We give the Mac a small "rest" so sounds don't overlap
-        #         time.sleep(1.5) 
-        #     except Exception as e:
-        #         print(f"Speech Delay Error: {e}")
-        #     finally:
-        #         self.is_speaking = False
-
-        # threading.Thread(target=run_speech, daemon=True).start()
+        threading.Thread(target=run_speech, daemon=True).start()
+       
 
     def enhance_frame(self, frame):
         """TRIPLE-PASS Enhancement for 3 Layers of Plastic."""
